@@ -29,7 +29,7 @@ public class Resilience {
 
   private static Logger logger = LoggerFactory.getLogger(Resilience.class);
   private static PoolingHttpClientConnectionManager connManager = new PoolingHttpClientConnectionManager();
-
+  private static RetryConfig retryConfig;
   public static Client getClient() {
     return InstanceHolder.INSTANCE;
   }
@@ -40,8 +40,10 @@ public class Resilience {
 
     ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(3);
 
-    RetryConfig retryConfig = RetryConfig.<Response>custom().maxAttempts(3)
-        .retryOnResult(response -> response.getStatus() == 500).build();
+     retryConfig = RetryConfig.<Response>custom().maxAttempts(3)
+        .retryOnResult(response -> response.getStatus() == 500)
+        .retryOnException(ex -> ex instanceof MyCustomException)
+        .build();
 
     CompletableFuture<Response> future = Decorators
         .ofCallable(Resilience::doWork)
@@ -70,15 +72,17 @@ public class Resilience {
 private static Response doWork() {
       WebTarget webTarget = getClient().target("https://httpstat.us/500");
       Invocation.Builder builder = webTarget.request(MediaType.APPLICATION_JSON);
-      Response response = null;
+      Response response;
       try {
         response = builder.get();
-        return response;
-      }  finally {
-        logger.info("finish");
-        if (Thread.currentThread().isInterrupted() && response != null) {
+        if(retryConfig.getResultPredicate().test(response)){
           response.close();
+          throw  new MyCustomException();
         }
+        return response;
+      } catch (Exception ex) {
+        logger.error("finish with exception");
+        throw ex;
       }
  }
 
@@ -97,5 +101,7 @@ private static Response doWork() {
       return client;
     }
   }
+
+  static class  MyCustomException extends RuntimeException { }
 
 }
